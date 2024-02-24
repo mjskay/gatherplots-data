@@ -1,0 +1,164 @@
+---
+title: "Gatherplots data"
+format: 
+  html:
+    df-print: paged
+knitr:
+  opts_chunk: 
+    dev: svg
+---
+
+This is a basic attempt to re-create the plots from the raw [Gatherplots paper](https://www.journalovi.org/2023-park-gatherplots/) data.
+I'm using mixed-effects linear models instead of bootstrapping, but the 
+overall pattern of results should be similar (and indeed they are).
+
+First, load required libraries:
+
+```{r setup, message=FALSE, warning=FALSE}
+library(tidyverse)   # plotting and data manipulation
+library(lme4)        # lmer
+library(rlang)       # exprs, inject
+library(emmeans)     # emmeans
+
+# roughly re-create the Vega-Lite theme...
+theme_set(
+  theme_light() +
+  theme(
+    panel.grid.minor.x = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.y = element_blank()
+  )
+)
+```
+
+## Load the data
+
+Load in the data and re-create the Visualization and Task columns:
+
+```{r read_data}
+df = read.csv("gatherplots-FINAL.csv") |>
+  mutate(
+    Visualization = factor(
+      case_when(
+        Abs & Rel ~ "both",
+        as.logical(Abs) ~ "abs",
+        as.logical(Rel) ~ "norm",
+        .default = "jitter"
+      ), 
+      levels = c("both", "norm", "abs", "jitter")
+    ),
+    Task = factor(paste0("T", Task), levels = paste0("T", 5:1))
+  )
+
+df
+```
+
+## Models
+
+Since we're only interested in marginal means, we'll just do a quick-and-dirty 
+mixed effects linear model with a Task x Visualization interaction and a
+random intercept by participant (I don't see multiple observations per participant
+per cell, so no random slopes here):
+
+```{r models}
+models = lapply(quos_auto_name(exprs(Correct, Time, Confidence)), function(outcome) {
+  inject(lmer(!!outcome ~ Task * Visualization + (1 |ID), data = df))
+})
+```
+
+## Plots
+
+We'll need the color scale from the paper:
+
+```{r color_scale}
+vis_color_scale = scale_color_manual(values = c(
+  jitter = "#E45756",
+  abs ="#4C78A8",
+  norm = "#72B7B2",
+  both = "#F58518"
+))
+```
+
+### Effects conditional on vis
+
+First, the plots of the mean of each outcome conditional on each vis type.
+We can ignore the warnings emmeans gives about interactions here.
+
+```{r vis_plot}
+vis_plot = function(outcome_name) {
+  models[[outcome_name]] |>
+    emmeans( ~ Visualization) |> 
+    as.data.frame() |> 
+    ggplot(aes(
+      x = emmean, 
+      xmin = lower.CL, 
+      xmax = upper.CL, 
+      y = Visualization, 
+      color = Visualization
+    )) + 
+    geom_pointrange() +
+    xlab(outcome_name) +
+    vis_color_scale +
+    guides(color = "none")
+}
+```
+
+```{r correct_vis, fig.height = 1.65, fig.width = 4}
+vis_plot("Correct") +
+  scale_x_continuous(expand = expansion(0, 0), breaks = seq(0, 1, length.out = 6)) +
+  coord_cartesian(xlim = c(0, 1))
+```
+
+
+```{r time_vis, fig.height = 1.65, fig.width = 4}
+vis_plot("Time") +
+  scale_x_continuous(expand = expansion(0, 0), breaks = seq(0, 70, length.out = 8)) +
+  coord_cartesian(xlim = c(0, 70))
+```
+```{r confidence_vis, fig.height = 1.65, fig.width = 4}
+vis_plot("Confidence") +
+  scale_x_continuous(expand = expansion(0, 0), breaks = seq(0, 7, length.out = 8)) +
+  coord_cartesian(xlim = c(0, 7))
+```
+
+### Effects conditional on vis x task
+
+Now, plots of means conditional on vis and task.
+
+```{r}
+vis_task_plot = function(outcome_name) {
+  models[[outcome_name]] |>
+    emmeans( ~ Visualization * Task) |> 
+    as.data.frame() |> 
+    ggplot(aes(
+      x = emmean, 
+      xmin = lower.CL, 
+      xmax = upper.CL, 
+      y = interaction(Visualization, Task, sep = " - "), 
+      color = Visualization
+    )) + 
+    geom_pointrange() +
+    xlab(outcome_name) +
+    vis_color_scale +
+    guides(color = "none") +
+    ylab("Task | Visualization")
+}
+```
+
+```{r correct_vis_task, fig.height = 5, fig.width = 4}
+vis_task_plot("Correct") +
+  scale_x_continuous(expand = expansion(0, 0), breaks = seq(0, 1, length.out = 6)) +
+  coord_cartesian(xlim = c(0, 1))
+```
+
+```{r time_vis_task, fig.height = 5, fig.width = 4}
+vis_task_plot("Time") +
+  scale_x_continuous(expand = expansion(0, 0), breaks = seq(0, 70, length.out = 8)) +
+  coord_cartesian(xlim = c(0, 70))
+```
+
+```{r confidence_vis_task, fig.height = 5, fig.width = 4}
+vis_task_plot("Confidence") +
+  scale_x_continuous(expand = expansion(0, 0), breaks = seq(0, 7, length.out = 8)) +
+  coord_cartesian(xlim = c(0, 7))
+```
